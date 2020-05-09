@@ -5,9 +5,19 @@ fetch("/api/transaction")
   .then(response => {
     return response.json();
   })
-  .then(data => {
+  .then(async function(data) {
     // save db data on global variable
     transactions = data;
+
+    // add data from localdb if it exists
+    let localdata = await getLocalRecords() || [];
+    // if it exists, also try to add it to ther server
+    if(localdata.length > 0 ){
+      tryAddLocal(localdata);
+    }
+
+    //update the global transactions with local data
+    transactions = [...localdata.reverse() ,...transactions];
 
     populateTotal();
     populateTable();
@@ -176,5 +186,66 @@ function saveRecord(postData) {
 
     // Adds data to our objectStore
     savedPostsStore.add({ time: postData.date, body: postData });
+  }
+}
+
+function getLocalRecords() {
+  return new Promise(function(resolve, reject){
+    const localPosts = []
+    const request = window.indexedDB.open("savedPosts", 1);
+
+    request.onupgradeneeded = event => {
+      const db = event.target.result;
+  
+      // Creates an object store with a listID keypath that can be used to query on.
+      const savedPostsStore = db.createObjectStore("savedPosts", { keyPath: "time" });
+      // Creates a statusIndex that we can query on.
+      savedPostsStore.createIndex("time", "body");
+    }
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction(["savedPosts"], "readwrite");
+      const savedPostsStore = transaction.objectStore("savedPosts");
+      //const timeIndex = savedPostsStore.index("time");
+
+      const getStoredPosts = savedPostsStore.getAll();
+
+      getStoredPosts.onsuccess = () => {
+        // console.log(getStoredPosts.result)
+        for (post of getStoredPosts.result){
+          localPosts.push(post.body);
+        }
+
+        resolve(localPosts);
+        return;
+      };
+    }
+  });
+}
+
+function tryAddLocal(localdata){
+  try{
+    fetch("/api/transaction/bulk", {
+      method: "POST",
+      body: JSON.stringify(localdata),
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+      }
+    }).then(function (data){
+      console.log("Local posts successfully added to database!");
+
+      const request = window.indexedDB.open("savedPosts", 1);
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction(["savedPosts"], "readwrite");
+        const savedPostsStore = transaction.objectStore("savedPosts");
+        savedPostsStore.clear();
+        console.log("Local Database Cleared");
+      }
+    })
+  }catch(err){
+    console.log("Still no internet connection, but your local data has been added to the graph.");
   }
 }
